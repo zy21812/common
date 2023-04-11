@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/zy21812/common/cache"
 
@@ -114,42 +113,4 @@ func (cv *Context) BindAndValidate(i interface{}) error {
 
 func SetAuth(token string, data interface{}) {
 	goCahce.SetBySliding(token, data, 10*60)
-}
-
-var anonymousUrls = []string{"/api/user.login", "/api/login"}
-
-func Auth(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		cc := &Context{c, nil, validator.New()}
-		uri := c.Request().RequestURI
-		if strings.HasPrefix(uri, "/api") {
-			// 路由拦截 - 登录身份、资源权限判断等
-			for i := range anonymousUrls {
-				if strings.HasPrefix(uri, anonymousUrls[i]) {
-					return next(cc)
-				}
-			}
-			token := cc.Request().Header.Get("Authorization")
-			if token != "" {
-				if item := goCahce.Get(token); item != nil {
-					cc.Auth = item.(*AuthInfo)
-				}
-			}
-			if cc.Auth == nil {
-				logrus.Warnf("401 [%s] %s", uri, token)
-				return cc.NoLogin()
-			}
-			// authorization := v.(dto.Authorization)
-			// if strings.EqualFold(constant.LoginToken, authorization.Type) {
-			// 	if authorization.Remember {
-			// 		// 记住登录有效期两周
-			// 		cache.TokenManager.Set(token, authorization, cache.RememberMeExpiration)
-			// 	} else {
-			// 		cache.TokenManager.Set(token, authorization, cache.NotRememberExpiration)
-			// 	}
-			// }
-			return next(cc)
-		}
-		return next(cc)
-	}
 }

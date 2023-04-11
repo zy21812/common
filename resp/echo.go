@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/go-playground/validator"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -18,11 +19,11 @@ import (
 
 var (
 	runOnce sync.Once
-	_echo   *Echo
+	_echo   *echoext
 )
 
 type HandlerFunc func(c *Context) error
-type Echo struct {
+type echoext struct {
 	echo *echo.Echo
 }
 
@@ -34,9 +35,9 @@ func init() {
 		return false
 	})
 }
-func GetEcho() *Echo {
+func GetEcho() *echoext {
 	runOnce.Do(func() {
-		_echo = &Echo{echo: echo.New()}
+		_echo = &echoext{echo: echo.New()}
 		_echo.echo.HideBanner = true
 		// e.Use(middleware.Recover())
 		_echo.Use(middleware.CORSWithConfig(middleware.CORSConfig{
@@ -48,7 +49,7 @@ func GetEcho() *Echo {
 		_echo.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 			return func(c echo.Context) error {
 				if err := next(c); err != nil {
-					logrus.Errorf("error=>%s=>%s=>%s", err, c.Request().Method, c.Path())
+					logrus.Errorf("error=>%s=>%s=>%s", err, c.Request().Method, c.Request().URL.Path)
 					if he, ok := err.(*echo.HTTPError); ok {
 						message := fmt.Sprintf("%v", he.Message)
 						return c.JSON(200, map[string]interface{}{"code": he.Code, "msg": message})
@@ -61,45 +62,46 @@ func GetEcho() *Echo {
 					return c.JSON(200, map[string]interface{}{"code": code, "msg": err.Error()})
 				}
 				if c.Response().Status == 404 {
-					logrus.Errorf("succ1=>%d=>%s=>%s", c.Response().Status, c.Request().Method, c.Path())
+					logrus.Errorf("succ1=>%d=>%s=>%s", c.Response().Status, c.Request().Method, c.Request().URL.Path)
 					c.Response().Status = 200
 					return c.HTMLBlob(200, []byte{})
 				}
 				return nil
 			}
 		})
-		_echo.Use(Auth)
-
+		_echo.Use(auth)
 	})
 	return _echo
 }
 
-func (e *Echo) Static(www http.FileSystem, indexFile []byte) {
-	_echo.routeNotFound("/*", func(c echo.Context) error {
-		if strings.HasPrefix(c.Request().URL.Path, "/api") {
-			return c.JSON(200, map[string]interface{}{"code": 404, "msg": "not found"})
-		} else {
-			return c.HTMLBlob(200, indexFile)
-		}
-	})
+func (e *echoext) Static(www http.FileSystem, indexFile []byte) {
+	if indexFile != nil {
+		_echo.routeNotFound("/*", func(c echo.Context) error {
+			if strings.HasPrefix(c.Request().URL.Path, "/api") {
+				return c.JSON(200, map[string]interface{}{"code": 404, "msg": "not found"})
+			} else {
+				return c.HTMLBlob(200, indexFile)
+			}
+		})
+	}
 	assetHandler := http.FileServer(www)
 	_echo.GET("/", wrapHandler(assetHandler))
 	_echo.GET("/assets/*", wrapHandler(http.StripPrefix("/", assetHandler)))
 }
 
-func (e *Echo) Group(path string) *Group {
+func (e *echoext) Group(path string) *Group {
 	return &Group{e.echo.Group(path)}
 }
-func (e *Echo) Use(middleware ...echo.MiddlewareFunc) {
+func (e *echoext) Use(middleware ...echo.MiddlewareFunc) {
 	e.echo.Use(middleware...)
 }
-func (e *Echo) routeNotFound(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
+func (e *echoext) routeNotFound(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
 	return e.echo.RouteNotFound(path, h, m...)
 }
-func (e *Echo) GET(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
+func (e *echoext) GET(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
 	return e.echo.GET(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
 }
-func (e *Echo) POST(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
+func (e *echoext) POST(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
 	return e.echo.POST(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
 }
 func wrapHandler(h http.Handler) HandlerFunc {
@@ -108,10 +110,10 @@ func wrapHandler(h http.Handler) HandlerFunc {
 		return nil
 	}
 }
-func (e *Echo) Start(addr string) error {
+func (e *echoext) Start(addr string) error {
 	return e.echo.Start(addr)
 }
-func (e *Echo) Shutdown(ctx context.Context) error {
+func (e *echoext) Shutdown(ctx context.Context) error {
 	return e.echo.Shutdown(ctx)
 }
 
@@ -124,4 +126,42 @@ func (e *Group) GET(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.
 }
 func (e *Group) POST(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
 	return e.group.POST(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
+}
+
+var AnonymousUrls = []string{"/api/user.login", "/api/login"}
+
+func auth(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		cc := &Context{c, nil, validator.New()}
+		uri := c.Request().RequestURI
+		if strings.HasPrefix(uri, "/api") {
+			// 路由拦截 - 登录身份、资源权限判断等
+			for i := range AnonymousUrls {
+				if strings.HasPrefix(uri, AnonymousUrls[i]) {
+					return next(cc)
+				}
+			}
+			token := cc.Request().Header.Get("Authorization")
+			if token != "" {
+				if item := goCahce.Get(token); item != nil {
+					cc.Auth = item.(*AuthInfo)
+				}
+			}
+			if cc.Auth == nil {
+				logrus.Warnf("401 [%s] %s", uri, token)
+				return cc.NoLogin()
+			}
+			// authorization := v.(dto.Authorization)
+			// if strings.EqualFold(constant.LoginToken, authorization.Type) {
+			// 	if authorization.Remember {
+			// 		// 记住登录有效期两周
+			// 		cache.TokenManager.Set(token, authorization, cache.RememberMeExpiration)
+			// 	} else {
+			// 		cache.TokenManager.Set(token, authorization, cache.NotRememberExpiration)
+			// 	}
+			// }
+			return next(cc)
+		}
+		return next(cc)
+	}
 }
