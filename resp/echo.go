@@ -1,7 +1,7 @@
 package resp
 
 import (
-	"context"
+	cc "context"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,7 +22,7 @@ var (
 	_echo   *echoext
 )
 
-type HandlerFunc func(c *Context) error
+type HandlerFunc func(c Context) error
 type echoext struct {
 	echo *echo.Echo
 }
@@ -99,13 +99,13 @@ func (e *echoext) routeNotFound(path string, h echo.HandlerFunc, m ...echo.Middl
 	return e.echo.RouteNotFound(path, h, m...)
 }
 func (e *echoext) GET(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
-	return e.echo.GET(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
+	return e.echo.GET(path, func(c echo.Context) error { return h(c.(*context)) }, m...)
 }
 func (e *echoext) POST(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
-	return e.echo.POST(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
+	return e.echo.POST(path, func(c echo.Context) error { return h(c.(*context)) }, m...)
 }
 func wrapHandler(h http.Handler) HandlerFunc {
-	return func(c *Context) error {
+	return func(c Context) error {
 		h.ServeHTTP(c.Response(), c.Request())
 		return nil
 	}
@@ -113,7 +113,7 @@ func wrapHandler(h http.Handler) HandlerFunc {
 func (e *echoext) Start(addr string) error {
 	return e.echo.Start(addr)
 }
-func (e *echoext) Shutdown(ctx context.Context) error {
+func (e *echoext) Shutdown(ctx cc.Context) error {
 	return e.echo.Shutdown(ctx)
 }
 
@@ -122,17 +122,17 @@ type Group struct {
 }
 
 func (e *Group) GET(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
-	return e.group.GET(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
+	return e.group.GET(path, func(c echo.Context) error { return h(c.(*context)) }, m...)
 }
 func (e *Group) POST(path string, h HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route {
-	return e.group.POST(path, func(c echo.Context) error { return h(c.(*Context)) }, m...)
+	return e.group.POST(path, func(c echo.Context) error { return h(c.(*context)) }, m...)
 }
 
 var AnonymousUrls = []string{"/api/user.login", "/api/login"}
 
 func auth(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		cc := &Context{c, nil, validator.New()}
+		cc := &context{c, nil, validator.New()}
 		uri := c.Request().RequestURI
 		if strings.HasPrefix(uri, "/api") {
 			// 路由拦截 - 登录身份、资源权限判断等
@@ -144,10 +144,10 @@ func auth(next echo.HandlerFunc) echo.HandlerFunc {
 			token := cc.Request().Header.Get("Authorization")
 			if token != "" {
 				if item := goCahce.Get(token); item != nil {
-					cc.Auth = item.(*AuthInfo)
+					cc.auth = item.(*AuthInfo)
 				}
 			}
-			if cc.Auth == nil {
+			if cc.auth == nil {
 				logrus.Warnf("401 [%s] %s", uri, token)
 				return cc.NoLogin()
 			}

@@ -19,9 +19,28 @@ type Result struct {
 	Data interface{} `json:"data"`
 }
 
-type Context struct {
+type Context interface {
 	echo.Context
-	Auth      *AuthInfo
+	Auth() *AuthInfo
+	PageOK(data interface{}, total int64) error
+	Ok(data interface{}) error
+	ParamErr(msg string, a ...any) error
+	BadRequest(msg string, a ...any) error
+	NotFound(msg string, a ...any) error
+	NoPermission() error
+	NoLogin() error
+	ServerErr(msg string, a ...any) error
+	Json(code int, data interface{}, msg string, a ...any) error
+	Resp(code int, data interface{}) error
+	Stm(buf []byte) error
+	Uri() string
+	QueryParamInt(key string) int
+	BindAndValidate(i interface{}) error
+}
+
+type context struct {
+	echo.Context
+	auth      *AuthInfo
 	validator *validator.Validate
 }
 type AuthInfo struct {
@@ -40,43 +59,42 @@ func init() {
 	goCahce = cache.NewMemory()
 }
 
-// func R(ctx echo.Context) *Context {
-// 	return &Context{ctx, nil}
-// }
-
-func (c *Context) PageOK(data interface{}, total int64) error {
+func (c *context) Auth() *AuthInfo {
+	return c.auth
+}
+func (c *context) PageOK(data interface{}, total int64) error {
 	return c.JSON(http.StatusOK, &Result{Code: 200, Data: map[string]interface{}{"total": total, "list": data}})
 }
 
-func (c *Context) Ok(data interface{}) error {
+func (c *context) Ok(data interface{}) error {
 	return c.JSON(http.StatusOK, &Result{Code: 200, Data: data})
 }
 
-func (c *Context) ParamErr(msg string, a ...any) error {
+func (c *context) ParamErr(msg string, a ...any) error {
 	return c.JSON(http.StatusOK, &Result{Code: 400, Msg: "参数解析错误:" + fmt.Sprintf(msg, a...)})
 }
-func (c *Context) BadRequest(msg string, a ...any) error {
+func (c *context) BadRequest(msg string, a ...any) error {
 	return c.JSON(http.StatusOK, &Result{Code: 400, Msg: fmt.Sprintf(msg, a...)})
 }
-func (c *Context) NotFound(msg string, a ...any) error {
+func (c *context) NotFound(msg string, a ...any) error {
 	return c.JSON(http.StatusOK, &Result{Code: 404, Msg: fmt.Sprintf(msg, a...)})
 }
 
-func (c *Context) NoPermission() error {
+func (c *context) NoPermission() error {
 	return c.JSON(http.StatusOK, &Result{Code: 403})
 }
 
-func (c *Context) NoLogin() error {
+func (c *context) NoLogin() error {
 	return c.JSON(http.StatusUnauthorized, &Result{Code: 401})
 }
 
-func (c *Context) ServerErr(msg string, a ...any) error {
+func (c *context) ServerErr(msg string, a ...any) error {
 	return c.JSON(http.StatusOK, &Result{Code: 500, Msg: fmt.Sprintf(msg, a...)})
 }
-func (c *Context) Json(code int, data interface{}, msg string, a ...any) error {
+func (c *context) Json(code int, data interface{}, msg string, a ...any) error {
 	return c.JSON(http.StatusOK, &Result{Code: code, Data: data, Msg: fmt.Sprintf(msg, a...)})
 }
-func (c *Context) Resp(code int, data interface{}) error {
+func (c *context) Resp(code int, data interface{}) error {
 	if data != nil {
 		if str, ok := data.(string); ok {
 			return c.String(code, str)
@@ -84,15 +102,15 @@ func (c *Context) Resp(code int, data interface{}) error {
 	}
 	return c.JSON(code, data)
 }
-func (c *Context) Stm(buf []byte) error {
+func (c *context) Stm(buf []byte) error {
 	return c.Stream(200, "application/octet-stream", bytes.NewReader(buf))
 }
 
-func (c *Context) Uri() string {
+func (c *context) Uri() string {
 	return c.Context.Scheme() + "://" + c.Request().Host + "/"
 }
 
-func (c *Context) QueryParamInt(key string) int {
+func (c *context) QueryParamInt(key string) int {
 	tmp := c.QueryParam(key)
 	if n, err := strconv.Atoi(tmp); err == nil {
 		return n
@@ -100,7 +118,7 @@ func (c *Context) QueryParamInt(key string) int {
 	return 0
 }
 
-func (cv *Context) BindAndValidate(i interface{}) error {
+func (cv *context) BindAndValidate(i interface{}) error {
 	if err := cv.Bind(i); err != nil {
 		return err
 	}
